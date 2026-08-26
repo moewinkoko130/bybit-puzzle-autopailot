@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 
 @dataclass
@@ -10,6 +11,40 @@ class RiskResult:
     risk_amount: float
     risk_percent: float
     position_size: float
+
+
+@dataclass(frozen=True)
+class RiskDecision:
+    approved: bool
+    reason: str = ""
+
+
+class RiskGatekeeper:
+    def __init__(self, clock=datetime.now):
+        self.clock = clock
+        self.last_trade_at: datetime | None = None
+
+    def validate(
+        self,
+        account_balance: float,
+        daily_pnl: float = 0.0,
+        consecutive_losses: int = 0,
+        last_trade_at: datetime | None = None,
+    ) -> RiskDecision:
+        if account_balance <= 0:
+            return RiskDecision(False, "Account balance must be greater than zero.")
+        daily_limit = float(os.getenv("DAILY_LOSS_LIMIT", "5.0"))
+        max_losses = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "3"))
+        cooldown = int(os.getenv("POST_TRADE_COOLDOWN_SECONDS", "0"))
+        if daily_pnl <= -(account_balance * daily_limit / 100):
+            return RiskDecision(False, "Daily loss limit reached.")
+        if consecutive_losses >= max_losses:
+            return RiskDecision(False, "Maximum consecutive losses reached.")
+        trade_time = last_trade_at or self.last_trade_at
+        if trade_time is not None:
+            if self.clock() - trade_time < timedelta(seconds=cooldown):
+                return RiskDecision(False, "Post-trade cooldown is active.")
+        return RiskDecision(True)
 
 
 def get_risk_percent() -> float:
@@ -37,6 +72,7 @@ def calculate_risk(
     account_balance: float,
     stop_loss_percent: float = 1.0,
     reward_ratio: float = 2.0,
+    side: str = "BUY",
 ) -> RiskResult:
 
     if entry <= 0:
@@ -57,6 +93,10 @@ def calculate_risk(
             "Reward ratio must be greater than zero."
         )
 
+    side = side.upper()
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("Side must be BUY or SELL.")
+
     risk_percent = get_risk_percent()
 
     risk_amount = (
@@ -65,24 +105,15 @@ def calculate_risk(
         / 100
     )
 
-    stop_loss = (
-        entry
-        * (1 - stop_loss_percent / 100)
-    )
+    risk_distance = entry * stop_loss_percent / 100
+    if side == "BUY":
+        stop_loss = entry - risk_distance
+        take_profit = entry + risk_distance * reward_ratio
+    else:
+        stop_loss = entry + risk_distance
+        take_profit = entry - risk_distance * reward_ratio
 
-    take_profit = (
-        entry
-        * (
-            1
-            + (
-                stop_loss_percent
-                * reward_ratio
-                / 100
-            )
-        )
-    )
-
-    price_risk = entry - stop_loss
+    price_risk = abs(entry - stop_loss)
 
     position_size = (
         risk_amount / price_risk

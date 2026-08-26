@@ -4,7 +4,7 @@ from datetime import datetime
 
 from app.market import get_candles
 from app.strategy import analyze_prices
-from app.risk import calculate_risk
+from app.risk import RiskGatekeeper, calculate_risk
 from app.paper import (
     PaperPosition,
     PaperTrade,
@@ -189,6 +189,7 @@ def run_signal_bot() -> None:
     account_balance = get_paper_balance()
     stop_loss_percent = get_stop_loss_percent()
     reward_ratio = get_reward_ratio()
+    risk_gate = RiskGatekeeper()
 
     try:
 
@@ -305,6 +306,7 @@ def run_signal_bot() -> None:
                         trade_history.append(
                             trade
                         )
+                        risk_gate.last_trade_at = datetime.now()
 
                         print()
                         print(
@@ -336,6 +338,7 @@ def run_signal_bot() -> None:
                         trade_history.append(
                             trade
                         )
+                        risk_gate.last_trade_at = datetime.now()
 
                         print()
                         print(
@@ -359,38 +362,30 @@ def run_signal_bot() -> None:
                     and signal in {"BUY", "SELL"}
                 ):
 
+                    consecutive_losses = 0
+                    for trade in reversed(trade_history):
+                        if trade.pnl >= 0:
+                            break
+                        consecutive_losses += 1
+                    decision = risk_gate.validate(
+                        account_balance=account_balance,
+                        daily_pnl=sum(trade.pnl for trade in trade_history),
+                        consecutive_losses=consecutive_losses,
+                    )
+                    if not decision.approved:
+                        print(f"Risk rejected: {decision.reason}")
+                        continue
+
                     risk_result = calculate_risk(
                         entry=last_price,
                         account_balance=account_balance,
                         stop_loss_percent=stop_loss_percent,
                         reward_ratio=reward_ratio,
+                        side=signal,
                     )
 
                     stop_loss = risk_result.stop_loss
                     take_profit = risk_result.take_profit
-
-                    if signal == "SELL":
-
-                        stop_loss = (
-                            last_price
-                            * (
-                                1
-                                + stop_loss_percent
-                                / 100
-                            )
-                        )
-
-                        take_profit = (
-                            last_price
-                            * (
-                                1
-                                - (
-                                    stop_loss_percent
-                                    * reward_ratio
-                                    / 100
-                                )
-                            )
-                        )
 
                     paper_position = (
                         paper_executor.open_position(

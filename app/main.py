@@ -1198,6 +1198,8 @@ def paper_performance() -> None:
         os.getenv("PAPER_DB_PATH", "logs/paper_positions.db")
     ) as executor:
         print_statistics(executor.closed_trades())
+        print(f"Open Positions: {1 if executor.position else 0}")
+        print(f"Closed Positions: {len(executor.closed_trades())}")
     print()
     print("✓ PAPER ONLY")
     print("✓ No real trading order was placed.")

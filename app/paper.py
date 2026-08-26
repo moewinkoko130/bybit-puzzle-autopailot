@@ -408,6 +408,8 @@ def calculate_statistics(
             "win_rate": 0.0,
             "total_pnl": 0.0,
             "average_pnl": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
         }
 
     wins = sum(
@@ -440,6 +442,15 @@ def calculate_statistics(
     win_rate = (
         wins / total_trades * 100
     )
+    gross_profit = sum(trade.pnl for trade in trades if trade.pnl > 0)
+    gross_loss = sum(-trade.pnl for trade in trades if trade.pnl < 0)
+    equity = 0.0
+    peak = 0.0
+    max_drawdown = 0.0
+    for trade in trades:
+        equity += trade.pnl
+        peak = max(peak, equity)
+        max_drawdown = max(max_drawdown, peak - equity)
 
     return {
         "total_trades": total_trades,
@@ -449,6 +460,12 @@ def calculate_statistics(
         "win_rate": win_rate,
         "total_pnl": total_pnl,
         "average_pnl": average_pnl,
+        "profit_factor": (
+            gross_profit / gross_loss
+            if gross_loss
+            else (float("inf") if gross_profit else 0.0)
+        ),
+        "max_drawdown": max_drawdown,
     }
 
 
@@ -505,6 +522,14 @@ def print_statistics(
     print(
         f"Average PnL  : "
         f"{stats['average_pnl']:+.4f}"
+    )
+    print(
+        f"Profit Factor: "
+        f"{stats['profit_factor']:.2f}"
+    )
+    print(
+        f"Max Drawdown : "
+        f"{stats['max_drawdown']:.4f}"
     )
 
 

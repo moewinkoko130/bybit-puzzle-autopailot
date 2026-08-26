@@ -1,7 +1,17 @@
+from dataclasses import dataclass
 from typing import Literal
 
 
 Signal = Literal["BUY", "SELL", "HOLD"]
+
+
+@dataclass(frozen=True)
+class SignalEvent:
+    action: Signal
+    fast_ema: float | None
+    slow_ema: float | None
+    previous_fast_ema: float | None = None
+    previous_slow_ema: float | None = None
 
 
 def calculate_ema(
@@ -45,7 +55,7 @@ def ema_signal(
             "smaller than slow EMA period."
         )
 
-    if len(prices) < slow_period:
+    if len(prices) < slow_period + 1:
         return "HOLD"
 
     fast_ema = calculate_ema(
@@ -64,10 +74,16 @@ def ema_signal(
     if slow_ema is None:
         return "HOLD"
 
-    if fast_ema > slow_ema:
+    previous_fast_ema = calculate_ema(prices[:-1], fast_period)
+    previous_slow_ema = calculate_ema(prices[:-1], slow_period)
+
+    if previous_fast_ema is None or previous_slow_ema is None:
+        return "HOLD"
+
+    if previous_fast_ema <= previous_slow_ema and fast_ema > slow_ema:
         return "BUY"
 
-    if fast_ema < slow_ema:
+    if previous_fast_ema >= previous_slow_ema and fast_ema < slow_ema:
         return "SELL"
 
     return "HOLD"
@@ -101,6 +117,13 @@ def analyze_prices(
         "fast_ema": fast_ema,
         "slow_ema": slow_ema,
         "signal": signal,
+        "event": SignalEvent(
+            action=signal,
+            fast_ema=fast_ema,
+            slow_ema=slow_ema,
+            previous_fast_ema=calculate_ema(prices[:-1], 9),
+            previous_slow_ema=calculate_ema(prices[:-1], 21),
+        ),
     }
 
 
