@@ -15,7 +15,6 @@ from app.live_analysis import (
 )
 
 from app.bot import run_signal_bot
-from app.risk import calculate_risk, risk_status
 
 
 ENV_FILE = Path(".env")
@@ -900,291 +899,103 @@ def strategy_settings() -> None:
 
 def risk_management() -> None:
 
-    while True:
+    print()
+    print(
+        "=== RISK MANAGEMENT ==="
+    )
 
-        print()
-        print("=== RISK MANAGEMENT ===")
-        print()
-        print("1. Max Risk Per Trade")
-        print("2. Stop Loss Settings")
-        print("3. Take Profit Settings")
-        print("4. Position Size Calculator")
-        print("5. Risk Status")
-        print("6. Back")
+    print()
+    print("1. Max risk per trade")
+    print("2. Stop-loss")
+    print("3. Take-profit")
+    print("4. Risk status")
+    print("5. Back")
 
-        choice = input(
-            "Choose an option: "
+    choice = input(
+        "Choose an option: "
+    ).strip()
+
+    if choice == "1":
+
+        risk = input(
+            "Enter maximum risk "
+            "percentage: "
         ).strip()
 
-        if choice == "1":
+        try:
 
-            risk = input(
-                "Enter maximum risk percentage: "
-            ).strip()
+            value = float(risk)
 
-            try:
-
-                value = float(risk)
-
-                if 0 < value <= 100:
-
-                    save_env_value(
-                        "MAX_RISK_PERCENT",
-                        str(value),
-                    )
-
-                    os.environ[
-                        "MAX_RISK_PERCENT"
-                    ] = str(value)
-
-                    print()
-                    print(
-                        f"✓ Max risk saved: "
-                        f"{value}%"
-                    )
-
-                else:
-
-                    print()
-                    print(
-                        "Risk must be between 0 and 100."
-                    )
-
-            except ValueError:
-
-                print()
-                print(
-                    "Please enter a valid number."
-                )
-
-        elif choice == "2":
-
-            stop_loss = input(
-                "Enter stop-loss percentage "
-                "(example: 1): "
-            ).strip()
-
-            try:
-
-                value = float(stop_loss)
-
-                if value <= 0:
-
-                    print(
-                        "Stop-loss must be greater than zero."
-                    )
-                    continue
-
-                if value > 100:
-
-                    print(
-                        "Stop-loss cannot exceed 100%."
-                    )
-                    continue
+            if 0 < value <= 100:
 
                 save_env_value(
-                    "STOP_LOSS_PERCENT",
+                    "MAX_RISK_PERCENT",
                     str(value),
                 )
 
                 os.environ[
-                    "STOP_LOSS_PERCENT"
+                    "MAX_RISK_PERCENT"
                 ] = str(value)
 
-                print()
                 print(
-                    f"✓ Stop-loss saved: {value}%"
+                    f"✓ Max risk saved: "
+                    f"{value}%"
                 )
 
-                print(
-                    "✓ PAPER ONLY"
-                )
-
-            except ValueError:
+            else:
 
                 print(
-                    "Please enter a valid number."
+                    "Risk must be "
+                    "between 0 and 100."
                 )
 
-        elif choice == "3":
+        except ValueError:
 
-            reward = input(
-                "Enter reward ratio "
-                "(example: 2 for 1:2): "
-            ).strip()
-
-            try:
-
-                value = float(reward)
-
-                if value <= 0:
-
-                    print(
-                        "Reward ratio must be greater than zero."
-                    )
-                    continue
-
-                save_env_value(
-                    "REWARD_RATIO",
-                    str(value),
-                )
-
-                os.environ[
-                    "REWARD_RATIO"
-                ] = str(value)
-
-                print()
-                print(
-                    f"✓ Reward ratio saved: 1:{value}"
-                )
-
-                print(
-                    "✓ PAPER ONLY"
-                )
-
-            except ValueError:
-
-                print(
-                    "Please enter a valid number."
-                )
-
-        elif choice == "4":
-
-            print()
-            print("=== POSITION SIZE CALCULATOR ===")
-            print()
-
-            balance_input = input(
-                "Account balance: "
-            ).strip()
-
-            entry_input = input(
-                "Entry price: "
-            ).strip()
-
-            try:
-
-                balance = float(balance_input)
-                entry = float(entry_input)
-
-                stop_loss_percent = float(
-                    os.getenv(
-                        "STOP_LOSS_PERCENT",
-                        "1.0",
-                    )
-                )
-
-                reward_ratio = float(
-                    os.getenv(
-                        "REWARD_RATIO",
-                        "2.0",
-                    )
-                )
-
-                result = calculate_risk(
-                    entry=entry,
-                    account_balance=balance,
-                    stop_loss_percent=stop_loss_percent,
-                    reward_ratio=reward_ratio,
-                )
-
-                print()
-                print("-" * 45)
-                print(
-                    f"Account Balance : "
-                    f"{balance:.2f}"
-                )
-                print(
-                    f"Risk Percent    : "
-                    f"{result.risk_percent:.2f}%"
-                )
-                print(
-                    f"Risk Amount     : "
-                    f"{result.risk_amount:.2f}"
-                )
-                print(
-                    f"Entry Price     : "
-                    f"{result.entry:.2f}"
-                )
-                print(
-                    f"Stop Loss       : "
-                    f"{result.stop_loss:.2f}"
-                )
-                print(
-                    f"Take Profit     : "
-                    f"{result.take_profit:.2f}"
-                )
-                print(
-                    f"Position Size   : "
-                    f"{result.position_size:.6f}"
-                )
-                print("-" * 45)
-                print()
-                print("✓ Risk calculation completed.")
-                print("✓ PAPER ONLY")
-                print("✓ No trading order was placed.")
-
-            except ValueError:
-
-                print()
-                print(
-                    "Please enter valid numeric values."
-                )
-
-            except Exception as exc:
-
-                print()
-                print(
-                    f"✗ Risk calculation failed: {exc}"
-                )
-
-        elif choice == "5":
-
-            risk = os.getenv(
-                "MAX_RISK_PERCENT",
-                "1.0",
-            )
-
-            stop_loss = os.getenv(
-                "STOP_LOSS_PERCENT",
-                "1.0",
-            )
-
-            reward_ratio = os.getenv(
-                "REWARD_RATIO",
-                "2.0",
-            )
-
-            print()
-            print("=== RISK STATUS ===")
-            print()
             print(
-                f"Max Risk Per Trade : {risk}%"
-            )
-            print(
-                f"Stop Loss          : {stop_loss}%"
-            )
-            print(
-                f"Reward Ratio       : 1:{reward_ratio}"
-            )
-            print(
-                "Execution Mode     : PAPER ONLY"
-            )
-            print()
-            print(
-                f"Status             : {risk_status()}"
+                "Please enter a valid number."
             )
 
-        elif choice == "6":
+    elif choice == "2":
 
-            return
+        print(
+            "Stop-loss configuration."
+        )
 
-        else:
+        print(
+            "Order execution is disabled."
+        )
 
-            print()
-            print(
-                "Invalid option. Please choose 1-6."
-            )
+    elif choice == "3":
+
+        print(
+            "Take-profit configuration."
+        )
+
+        print(
+            "Order execution is disabled."
+        )
+
+    elif choice == "4":
+
+        risk = os.getenv(
+            "MAX_RISK_PERCENT",
+            "Not configured",
+        )
+
+        print(
+            f"Max Risk: {risk}%"
+        )
+
+    elif choice == "5":
+
+        return
+
+    else:
+
+        print(
+            "Invalid option."
+        )
+
 
 def run_bot() -> None:
 
