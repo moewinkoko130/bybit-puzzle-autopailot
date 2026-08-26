@@ -44,6 +44,7 @@ class BybitV5Client:
         max_attempts: int = 3,
         backoff: float = 0.5,
         sleep: Callable[[float], None] = time.sleep,
+        allow_mainnet: bool = False,
     ) -> None:
         self.testnet = testnet
         self.endpoint = self.TESTNET_ENDPOINT if testnet else self.MAINNET_ENDPOINT
@@ -55,6 +56,7 @@ class BybitV5Client:
         self.max_attempts = max(1, max_attempts)
         self.backoff = max(0.0, backoff)
         self.sleep = sleep
+        self.allow_mainnet = allow_mainnet
         self._verify_endpoint()
 
     def _verify_endpoint(self) -> None:
@@ -64,7 +66,10 @@ class BybitV5Client:
 
     def _call(self, method: str, **params: Any) -> dict:
         if method in {"place_order", "cancel_order", "set_trading_stop"}:
-            self._require_testnet()
+            if self.allow_mainnet:
+                self._require_mainnet()
+            else:
+                self._require_testnet()
         for attempt in range(self.max_attempts):
             try:
                 response = getattr(self.session, method)(**params)
@@ -92,6 +97,13 @@ class BybitV5Client:
     def _require_testnet(self) -> None:
         if os.getenv("BYBIT_TESTNET", "true").lower() != "true" or not self.testnet:
             raise ExchangeSafetyError("Order operations require BYBIT_TESTNET=true.")
+        self._verify_endpoint()
+
+    def _require_mainnet(self) -> None:
+        if os.getenv("BYBIT_TESTNET", "true").lower() != "false" or self.testnet:
+            raise ExchangeSafetyError("Mainnet order operations require BYBIT_TESTNET=false.")
+        if self.endpoint != self.MAINNET_ENDPOINT:
+            raise ExchangeSafetyError("Mainnet endpoint verification failed.")
         self._verify_endpoint()
 
     def get_klines(self, symbol: str, interval: str, limit: int = 100) -> list[float]:
@@ -126,6 +138,9 @@ class BybitV5Client:
 
     def get_positions(self, symbol: str) -> list[dict]:
         return self._call("get_positions", category="linear", symbol=symbol).get("result", {}).get("list", [])
+
+    def get_wallet_balance(self) -> dict:
+        return self._call("get_wallet_balance", accountType="UNIFIED")
 
     def get_open_orders(self, symbol: str) -> list[dict]:
         return self._call("get_open_orders", category="linear", symbol=symbol).get("result", {}).get("list", [])

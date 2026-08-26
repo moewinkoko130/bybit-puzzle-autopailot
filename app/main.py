@@ -17,6 +17,7 @@ from app.live_analysis import (
 from app.bot import run_signal_bot
 from app.risk import calculate_risk, risk_status
 from app.paper import PaperExecutor, print_statistics
+from app.exchange import LiveExecutor, confirm_live_trading
 
 
 ENV_FILE = Path(".env")
@@ -620,23 +621,7 @@ def environment_settings() -> None:
         )
 
     elif choice == "2":
-
-        save_env_value(
-            "BYBIT_TESTNET",
-            "false",
-        )
-
-        os.environ[
-            "BYBIT_TESTNET"
-        ] = "false"
-
-        print(
-            "✓ Mainnet enabled."
-        )
-
-        print(
-            "Trading remains SAFE / DRY RUN."
-        )
+        enable_live_mode()
 
     elif choice == "3":
 
@@ -649,41 +634,71 @@ def environment_settings() -> None:
         )
 
 
+def enable_live_mode() -> bool:
+    print()
+    print("=== LIVE MODE SECURITY GATE ===")
+    print("Environment will remain unchanged unless every check passes.")
+    if not confirm_live_trading():
+        print("LIVE mode remains disabled.")
+        return False
+
+    previous_value = os.getenv("BYBIT_TESTNET", "true")
+    os.environ["BYBIT_TESTNET"] = "false"
+    try:
+        LiveExecutor.create(
+            api_key=os.getenv("BYBIT_API_KEY", ""),
+            api_secret=os.getenv("BYBIT_API_SECRET", ""),
+            symbol=os.getenv("BYBIT_SYMBOL", "BTCUSDT"),
+            confirmed=True,
+        )
+    except Exception as exc:
+        os.environ["BYBIT_TESTNET"] = previous_value
+        print(f"LIVE mode blocked: {exc}")
+        return False
+
+    save_env_value("BYBIT_TESTNET", "false")
+    os.environ["TRADING_MODE"] = "LIVE"
+    save_env_value("TRADING_MODE", "LIVE")
+    print("LIVE mode preflight passed and is enabled for this configuration.")
+    return True
+
+
 def trading_mode() -> None:
 
     print()
     print("=== TRADING MODE ===")
     print()
-    print("1. SAFE / DRY RUN")
-    print("2. LIVE ORDERS (disabled)")
-    print("3. Back")
+    print("1. PAPER")
+    print("2. TESTNET")
+    print("3. LIVE (security gate required)")
+    print("4. Back")
 
     choice = input(
         "Choose an option: "
     ).strip()
 
     if choice == "1":
-
-        print(
-            "✓ SAFE / DRY RUN selected."
-        )
-
+        save_env_value("TRADING_MODE", "PAPER")
+        os.environ["TRADING_MODE"] = "PAPER"
+        print("PAPER mode selected.")
         print(
             "No trading orders will be placed."
         )
 
     elif choice == "2":
-
-        print(
-            "LIVE ORDERS are disabled."
-        )
+        save_env_value("TRADING_MODE", "TESTNET")
+        save_env_value("BYBIT_TESTNET", "true")
+        os.environ["TRADING_MODE"] = "TESTNET"
+        os.environ["BYBIT_TESTNET"] = "true"
+        print("TESTNET mode selected.")
 
     elif choice == "3":
+        enable_live_mode()
 
+    elif choice == "4":
         return
 
     else:
-
         print(
             "Invalid option."
         )
@@ -1211,6 +1226,15 @@ def run_bot() -> None:
     run_signal_bot()
 
 
+def current_mode() -> str:
+    configured = os.getenv("TRADING_MODE", "PAPER").upper()
+    if configured == "LIVE" and os.getenv("BYBIT_TESTNET", "true").lower() == "false":
+        return "LIVE (preflight-approved)"
+    if os.getenv("BYBIT_TESTNET", "true").lower() == "true":
+        return "TESTNET"
+    return "PAPER"
+
+
 def show_menu() -> None:
 
     while True:
@@ -1219,6 +1243,7 @@ def show_menu() -> None:
         print("=" * 45)
         print("             BYBIT AUTOPILOT")
         print("=" * 45)
+        print(f"Execution Environment: {current_mode()}")
 
         print(
             "1. Configure Bybit API"
