@@ -16,6 +16,7 @@ from app.live_analysis import (
 
 from app.bot import run_signal_bot
 from app.risk import calculate_risk, risk_status
+from app.paper import PaperExecutor, print_statistics
 
 
 ENV_FILE = Path(".env")
@@ -1193,10 +1194,10 @@ def paper_performance() -> None:
     print("          PAPER PERFORMANCE")
     print("=" * 45)
     print()
-    print("No closed paper trades in current menu session.")
-    print()
-    print("Persistent trade history will be connected")
-    print("to the paper bot in the next step.")
+    with PaperExecutor(
+        os.getenv("PAPER_DB_PATH", "logs/paper_positions.db")
+    ) as executor:
+        print_statistics(executor.closed_trades())
     print()
     print("✓ PAPER ONLY")
     print("✓ No real trading order was placed.")
@@ -1261,9 +1262,8 @@ def show_menu() -> None:
             "11. Run Bot"
         )
 
-        print(
-            "12. Exit"
-        )
+        print("12. Paper Performance")
+        print("13. Exit")
 
         print("=" * 45)
 
@@ -1315,11 +1315,11 @@ def show_menu() -> None:
 
             run_bot()
 
-        elif choice == "13":
+        elif choice == "12":
 
             paper_performance()
 
-        elif choice == "12":
+        elif choice == "13":
 
             print()
             print(
@@ -1333,7 +1333,7 @@ def show_menu() -> None:
             print()
             print(
                 "Invalid option. "
-                "Please choose 1-12."
+                "Please choose 1-13."
             )
 
 

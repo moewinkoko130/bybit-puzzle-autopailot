@@ -1,9 +1,10 @@
-import math
 import sqlite3
-import uuid
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
 
 OPEN = "OPEN"
@@ -31,160 +32,246 @@ class PaperPosition:
 
 @dataclass
 class PaperTrade:
-    trade_id: str
-    symbol: str
-    timeframe: str
-    strategy: str
     side: str
     entry_price: float
     exit_price: float
     quantity: float
     pnl: float
-    exit_reason: str
+    reason: str
     opened_at: str
     closed_at: str
-    status: str = CLOSED
+    trade_id: str = ""
+    symbol: str = ""
+    timeframe: str = ""
+    strategy: str = ""
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
+    exit_reason: str = ""
     fees: float = 0.0
     slippage: float = 0.0
+    gross_pnl: float | None = None
+    net_pnl: float | None = None
+    realized_pnl: float | None = None
+    status: str = CLOSED
 
-    @property
-    def reason(self) -> str:
-        return self.exit_reason
+    def __post_init__(self):
+        if not self.exit_reason:
+            self.exit_reason = self.reason
+        if self.gross_pnl is None:
+            self.gross_pnl = self.pnl + self.fees
+        if self.net_pnl is None:
+            self.net_pnl = self.pnl
+        if self.realized_pnl is None:
+            self.realized_pnl = self.net_pnl
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class PaperExecutor:
-    """Deterministic, paper-only execution boundary backed by SQLite."""
+    def __init__(
+        self,
+        database_path: str | Path = "logs/paper_positions.db",
+        clock: Callable[[], datetime] = _utc_now,
+    ) -> None:
+        self.database_path = str(database_path)
+        self._clock = clock
+        database = Path(database_path)
+        if self.database_path != ":memory:":
+            database.parent.mkdir(parents=True, exist_ok=True)
+        self._connection = sqlite3.connect(self.database_path)
+        self._connection.row_factory = sqlite3.Row
+        self._closed = False
+        self._create_schema()
 
-    def __init__(self, db_path: str = ":memory:", clock: Callable[[], datetime] | None = None,
-                 fee_rate: float = 0.0, slippage: float = 0.0) -> None:
-        if fee_rate < 0 or slippage < 0:
-            raise ValueError("Fee rate and slippage cannot be negative.")
-        self.connection = sqlite3.connect(db_path)
-        self.connection.row_factory = sqlite3.Row
-        self.clock = clock or (lambda: datetime.now(timezone.utc))
-        self.fee_rate = fee_rate
-        self.slippage = slippage
-        self.connection.execute(
-            """CREATE TABLE IF NOT EXISTS paper_trades (
-            trade_id TEXT PRIMARY KEY, symbol TEXT NOT NULL, timeframe TEXT NOT NULL,
-            strategy TEXT NOT NULL, side TEXT NOT NULL, entry_price REAL NOT NULL,
-            quantity REAL NOT NULL, stop_loss REAL NOT NULL, take_profit REAL NOT NULL,
-            opened_at TEXT NOT NULL, closed_at TEXT, exit_price REAL, exit_reason TEXT,
-            fees REAL NOT NULL DEFAULT 0, slippage REAL NOT NULL DEFAULT 0,
-            realized_pnl REAL, status TEXT NOT NULL)"""
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise RuntimeError("PaperExecutor is closed.")
+
+    def _create_schema(self) -> None:
+        self._ensure_open()
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS paper_trades (
+                trade_id TEXT PRIMARY KEY, symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL, strategy TEXT NOT NULL,
+                side TEXT NOT NULL, entry_price REAL NOT NULL,
+                quantity REAL NOT NULL, stop_loss REAL NOT NULL,
+                take_profit REAL NOT NULL, opened_at TEXT NOT NULL,
+                closed_at TEXT, exit_price REAL, exit_reason TEXT,
+                fees REAL NOT NULL DEFAULT 0, slippage REAL NOT NULL DEFAULT 0,
+                gross_pnl REAL NOT NULL DEFAULT 0,
+                net_pnl REAL NOT NULL DEFAULT 0,
+                realized_pnl REAL NOT NULL DEFAULT 0, status TEXT NOT NULL
+            )
+            """
         )
-        self.connection.commit()
-
-    @staticmethod
-    def _validate_price(value: float, label: str) -> None:
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError(f"{label} must be greater than zero.")
-
-    @staticmethod
-    def _validate_position(side: str, entry: float, stop_loss: float, take_profit: float) -> None:
-        if side == "BUY" and not stop_loss < entry < take_profit:
-            raise ValueError("BUY stop loss must be below entry and take profit above entry.")
-        if side == "SELL" and not take_profit < entry < stop_loss:
-            raise ValueError("SELL stop loss must be above entry and take profit below entry.")
+        columns = {
+            row["name"]
+            for row in self._connection.execute(
+                "PRAGMA table_info(paper_trades)"
+            ).fetchall()
+        }
+        for column in ("gross_pnl", "net_pnl"):
+            if column not in columns:
+                self._connection.execute(
+                    f"ALTER TABLE paper_trades ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
+                )
+        self._connection.commit()
 
     @property
     def position(self) -> PaperPosition | None:
-        row = self.connection.execute(
-            "SELECT * FROM paper_trades WHERE status = ? ORDER BY opened_at LIMIT 1", (OPEN,)
+        self._ensure_open()
+        row = self._connection.execute(
+            "SELECT * FROM paper_trades WHERE status = ? LIMIT 1", (OPEN,)
         ).fetchone()
         if row is None:
             return None
+        return self._position_from_row(row)
+
+    def _position_from_row(self, row: sqlite3.Row) -> PaperPosition:
         return PaperPosition(
-            trade_id=row["trade_id"], symbol=row["symbol"], timeframe=row["timeframe"],
-            strategy=row["strategy"], side=row["side"], entry_price=row["entry_price"],
-            quantity=row["quantity"], stop_loss=row["stop_loss"], take_profit=row["take_profit"],
-            opened_at=row["opened_at"], status=row["status"],
+            side=row["side"], entry_price=row["entry_price"],
+            quantity=row["quantity"], stop_loss=row["stop_loss"],
+            take_profit=row["take_profit"], opened_at=row["opened_at"],
+            trade_id=row["trade_id"], symbol=row["symbol"],
+            timeframe=row["timeframe"], strategy=row["strategy"],
+            status=row["status"],
         )
 
-    def open_position(self, signal: str, entry_price: float, quantity: float, stop_loss: float,
-                      take_profit: float, symbol: str = "", timeframe: str = "", strategy: str = "",
-                      trade_id: str | None = None, opened_at: str | None = None) -> PaperPosition:
-        side = signal.upper().strip()
+    def open_position(
+        self,
+        side: str,
+        entry_price: float,
+        quantity: float,
+        stop_loss: float,
+        take_profit: float,
+        symbol: str = "",
+        timeframe: str = "",
+        strategy: str = "",
+    ) -> PaperPosition:
+        self._ensure_open()
+        side = side.upper()
         if side not in {"BUY", "SELL"}:
-            raise ValueError("Signal must be BUY or SELL.")
-        if not math.isfinite(quantity) or quantity <= 0:
+            raise ValueError("Side must be BUY or SELL.")
+        if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
+            raise ValueError("All prices must be greater than zero.")
+        if quantity <= 0:
             raise ValueError("Quantity must be greater than zero.")
-        self._validate_price(entry_price, "Entry price")
-        self._validate_price(stop_loss, "Stop loss")
-        self._validate_price(take_profit, "Take profit")
-        self._validate_position(side, entry_price, stop_loss, take_profit)
         if self.position is not None:
-            raise ValueError("An open paper position already exists.")
-        position = PaperPosition(
-            trade_id=trade_id or str(uuid.uuid4()), symbol=symbol, timeframe=timeframe,
-            strategy=strategy, side=side, entry_price=entry_price, quantity=quantity,
-            stop_loss=stop_loss, take_profit=take_profit,
-            opened_at=opened_at or self.clock().isoformat(),
-        )
-        self.connection.execute(
-            """INSERT INTO paper_trades
-            (trade_id, symbol, timeframe, strategy, side, entry_price, quantity,
-             stop_loss, take_profit, opened_at, fees, slippage, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
-            (position.trade_id, position.symbol, position.timeframe, position.strategy,
-             position.side, position.entry_price, position.quantity, position.stop_loss,
-             position.take_profit, position.opened_at, self.slippage, OPEN),
-        )
-        self.connection.commit()
-        return position
+            raise ValueError("A paper position already exists.")
 
-    def close_position(self, exit_price: float, reason: str = MANUAL_CLOSE) -> PaperTrade:
-        position = self.position
-        if position is None:
-            raise ValueError("There is no open paper position.")
-        reason = reason.upper().strip()
-        if reason not in EXIT_REASONS:
-            raise ValueError(f"Invalid exit reason: {reason}.")
-        self._validate_price(exit_price, "Exit price")
-        effective_exit = exit_price * (1 - self.slippage if position.side == "BUY" else 1 + self.slippage)
-        gross_pnl = calculate_pnl(position, effective_exit)
-        fees = (position.entry_price * position.quantity + effective_exit * position.quantity) * self.fee_rate
-        trade = PaperTrade(
-            trade_id=position.trade_id, symbol=position.symbol, timeframe=position.timeframe,
-            strategy=position.strategy, side=position.side, entry_price=position.entry_price,
-            exit_price=effective_exit, quantity=position.quantity, pnl=gross_pnl - fees,
-            exit_reason=reason, opened_at=position.opened_at, closed_at=self.clock().isoformat(),
-            fees=fees, slippage=self.slippage,
+        trade_id = uuid4().hex
+        opened_at = self._clock().isoformat()
+        self._connection.execute(
+            """
+            INSERT INTO paper_trades (
+                trade_id, symbol, timeframe, strategy, side, entry_price,
+                quantity, stop_loss, take_profit, opened_at, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (trade_id, symbol, timeframe, strategy, side, entry_price,
+             quantity, stop_loss, take_profit, opened_at, OPEN),
         )
-        self.connection.execute(
-            """UPDATE paper_trades SET closed_at = ?, exit_price = ?, exit_reason = ?,
-            fees = ?, realized_pnl = ?, status = ? WHERE trade_id = ?""",
-            (trade.closed_at, trade.exit_price, trade.exit_reason, trade.fees,
-             trade.pnl, CLOSED, trade.trade_id),
-        )
-        self.connection.commit()
-        return trade
+        self._connection.commit()
+        return self.position
 
     def check_exit(self, current_price: float) -> str:
+        self._ensure_open()
         position = self.position
         if position is None:
-            return CLOSED
-        self._validate_price(current_price, "Current price")
+            raise ValueError("No paper position is open.")
         return check_exit(position, current_price)
 
-    def close_at_trigger(self, current_price: float) -> PaperTrade | None:
+    def close_at_trigger(self, current_price: float) -> PaperTrade:
         reason = self.check_exit(current_price)
-        return None if reason == OPEN else self.close_position(current_price, reason)
+        if reason == OPEN:
+            raise ValueError("Position has not reached an exit trigger.")
+        return self.close_position(current_price, reason)
+
+    def close_position(
+        self,
+        exit_price: float,
+        exit_reason: str = MANUAL_CLOSE,
+        fees: float = 0.0,
+        slippage: float = 0.0,
+    ) -> PaperTrade:
+        self._ensure_open()
+        position = self.position
+        if position is None:
+            raise ValueError("No paper position is open.")
+        if exit_price <= 0:
+            raise ValueError("Exit price must be greater than zero.")
+        exit_reason = exit_reason.upper()
+        if exit_reason not in EXIT_REASONS:
+            raise ValueError("Invalid paper exit reason.")
+        if fees < 0 or slippage < 0:
+            raise ValueError("Fees and slippage cannot be negative.")
+        gross_pnl = calculate_pnl(position, exit_price)
+        net_pnl = gross_pnl - (slippage * position.quantity) - fees
+        closed_at = self._clock().isoformat()
+        self._connection.execute(
+            """
+            UPDATE paper_trades SET closed_at = ?, exit_price = ?,
+                     exit_reason = ?, fees = ?, slippage = ?, gross_pnl = ?,
+                     net_pnl = ?, realized_pnl = ?,
+                status = ? WHERE trade_id = ? AND status = ?
+            """,
+            (closed_at, exit_price, exit_reason, fees, slippage,
+                 gross_pnl, net_pnl, net_pnl, CLOSED, position.trade_id, OPEN),
+        )
+        self._connection.commit()
+        row = self._connection.execute(
+            "SELECT * FROM paper_trades WHERE trade_id = ?", (position.trade_id,)
+        ).fetchone()
+        return PaperTrade(
+            side=row["side"], entry_price=row["entry_price"],
+            exit_price=row["exit_price"], quantity=row["quantity"],
+            pnl=row["net_pnl"], reason=row["exit_reason"],
+            opened_at=row["opened_at"], closed_at=row["closed_at"],
+            trade_id=row["trade_id"], symbol=row["symbol"],
+            timeframe=row["timeframe"], strategy=row["strategy"],
+            stop_loss=row["stop_loss"], take_profit=row["take_profit"],
+            exit_reason=row["exit_reason"], fees=row["fees"],
+            slippage=row["slippage"], realized_pnl=row["realized_pnl"],
+            gross_pnl=row["gross_pnl"], net_pnl=row["net_pnl"],
+            status=row["status"],
+        )
 
     def closed_trades(self) -> list[PaperTrade]:
-        rows = self.connection.execute(
-            "SELECT * FROM paper_trades WHERE status = ? ORDER BY closed_at", (CLOSED,)
+        self._ensure_open()
+        rows = self._connection.execute(
+            "SELECT * FROM paper_trades WHERE status = ? ORDER BY opened_at",
+            (CLOSED,),
         ).fetchall()
-        return [PaperTrade(
-            trade_id=row["trade_id"], symbol=row["symbol"], timeframe=row["timeframe"],
-            strategy=row["strategy"], side=row["side"], entry_price=row["entry_price"],
-            exit_price=row["exit_price"], quantity=row["quantity"], pnl=row["realized_pnl"],
-            exit_reason=row["exit_reason"], opened_at=row["opened_at"], closed_at=row["closed_at"],
-            fees=row["fees"], slippage=row["slippage"],
-        ) for row in rows]
+        return [
+            PaperTrade(
+                side=row["side"], entry_price=row["entry_price"],
+                exit_price=row["exit_price"], quantity=row["quantity"],
+                pnl=row["net_pnl"], reason=row["exit_reason"],
+                opened_at=row["opened_at"], closed_at=row["closed_at"],
+                trade_id=row["trade_id"], symbol=row["symbol"],
+                timeframe=row["timeframe"], strategy=row["strategy"],
+                stop_loss=row["stop_loss"], take_profit=row["take_profit"],
+                exit_reason=row["exit_reason"], fees=row["fees"],
+                slippage=row["slippage"], realized_pnl=row["realized_pnl"],
+                gross_pnl=row["gross_pnl"], net_pnl=row["net_pnl"],
+                status=row["status"],
+            )
+            for row in rows
+        ]
 
     def close(self) -> None:
-        self.connection.close()
+        if not self._closed:
+            self._connection.close()
+            self._closed = True
+
+    def __enter__(self) -> "PaperExecutor":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
 
 def open_paper_position(
@@ -195,10 +282,35 @@ def open_paper_position(
     take_profit: float,
 ) -> PaperPosition | None:
 
-    try:
-        return PaperExecutor().open_position(signal, entry_price, quantity, stop_loss, take_profit)
-    except ValueError:
+    warnings.warn(
+        "open_paper_position is deprecated; use PaperExecutor.open_position.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+    signal = signal.upper()
+
+    if signal not in {"BUY", "SELL"}:
         return None
+
+    if entry_price <= 0:
+        return None
+
+    if quantity <= 0:
+        return None
+
+    now = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    return PaperPosition(
+        side=signal,
+        entry_price=entry_price,
+        quantity=quantity,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        opened_at=now,
+    )
 
 
 def calculate_pnl(
@@ -249,6 +361,12 @@ def close_paper_position(
     reason: str,
 ) -> PaperTrade:
 
+    warnings.warn(
+        "close_paper_position is deprecated; use PaperExecutor.close_position.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     if exit_price <= 0:
         raise ValueError(
             "Exit price must be greater than zero."
@@ -264,10 +382,14 @@ def close_paper_position(
     )
 
     return PaperTrade(
-        trade_id=position.trade_id, symbol=position.symbol, timeframe=position.timeframe,
-        strategy=position.strategy, side=position.side, entry_price=position.entry_price,
-        exit_price=exit_price, quantity=position.quantity, pnl=pnl,
-        exit_reason=reason.upper(), opened_at=position.opened_at, closed_at=closed_at,
+        side=position.side,
+        entry_price=position.entry_price,
+        exit_price=exit_price,
+        quantity=position.quantity,
+        pnl=pnl,
+        reason=reason.upper(),
+        opened_at=position.opened_at,
+        closed_at=closed_at,
     )
 
 

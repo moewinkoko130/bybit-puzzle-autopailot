@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import warnings
 
 import pytest
 
@@ -9,6 +10,8 @@ from app.paper import (
     STOP_LOSS,
     TAKE_PROFIT,
     PaperExecutor,
+    close_paper_position,
+    open_paper_position,
 )
 
 
@@ -109,3 +112,66 @@ def test_closed_history_survives_restart(tmp_path):
     assert trade.trade_id == position.trade_id
     assert trade.status == CLOSED
     second.close()
+
+
+def test_executor_context_manager_closes_connection(tmp_path):
+    database = tmp_path / "paper.sqlite3"
+    with PaperExecutor(str(database)) as engine:
+        engine.open_position("BUY", 100, 2, 90, 120)
+
+    with pytest.raises(Exception):
+        engine.closed_trades()
+
+
+def test_database_parent_directory_is_created(tmp_path):
+    database = tmp_path / "nested" / "paper.sqlite3"
+    engine = PaperExecutor(database)
+    assert database.exists()
+    engine.close()
+
+
+def test_open_position_survives_restart(tmp_path):
+    database = tmp_path / "paper.sqlite3"
+    first = PaperExecutor(database)
+    position = first.open_position("SELL", 100, 2, 110, 80)
+    first.close()
+
+    second = PaperExecutor(database)
+    assert second.position.trade_id == position.trade_id
+    assert second.position.side == "SELL"
+    second.close()
+
+
+def test_close_is_idempotent(tmp_path):
+    engine = executor(tmp_path)
+    engine.close()
+    engine.close()
+
+
+def test_legacy_helpers_are_deprecated():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        position = open_paper_position("BUY", 100, 1, 90, 120)
+        close_paper_position(position, 110, MANUAL_CLOSE)
+
+    assert len([warning for warning in caught if issubclass(
+        warning.category, DeprecationWarning
+    )]) == 2
+
+
+def test_trade_persists_gross_and_net_pnl(tmp_path):
+    engine = executor(tmp_path)
+    engine.open_position("BUY", 100, 2, 90, 120)
+    trade = engine.close_position(110, fees=1.5, slippage=0.5)
+
+    assert trade.gross_pnl == 20
+    assert trade.net_pnl == 17.5
+    assert trade.realized_pnl == 17.5
+
+    columns = {
+        row["name"]
+        for row in engine._connection.execute(
+            "PRAGMA table_info(paper_trades)"
+        ).fetchall()
+    }
+    assert {"gross_pnl", "fees", "net_pnl", "status"} <= columns
