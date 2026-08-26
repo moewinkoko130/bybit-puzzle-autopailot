@@ -18,6 +18,14 @@ from app.bot import run_signal_bot
 from app.risk import calculate_risk, risk_status
 from app.paper import PaperExecutor, print_statistics
 from app.exchange import LiveExecutor, confirm_live_trading
+from app.backtest import (
+    BacktestConfig,
+    BacktestEngine,
+    HistoricalDataLoader,
+    calculate_performance,
+    format_report,
+    optimize_strategy,
+)
 
 
 ENV_FILE = Path(".env")
@@ -1226,6 +1234,42 @@ def run_bot() -> None:
     run_signal_bot()
 
 
+def _load_backtest_file() -> list:
+    path = input("Historical CSV/JSON path: ").strip()
+    candles = HistoricalDataLoader.load(path)
+    if not candles:
+        raise ValueError("Historical file contains no candles.")
+    return candles
+
+
+def backtest_menu() -> None:
+    try:
+        candles = _load_backtest_file()
+        result = BacktestEngine(BacktestConfig()).run(candles)
+        print()
+        print("=== BACKTEST REPORT ===")
+        print(format_report(calculate_performance(result)))
+    except (OSError, ValueError) as exc:
+        print(f"Backtest failed: {exc}")
+
+
+def optimization_menu() -> None:
+    try:
+        candles = _load_backtest_file()
+        results = optimize_strategy(
+            candles,
+            fast_periods=(5, 9, 12),
+            slow_periods=(21, 30),
+            stop_loss_percents=(0.5, 1.0, 2.0),
+            reward_ratios=(1.5, 2.0, 3.0),
+        )
+        print("=== OUT-OF-SAMPLE OPTIMIZATION ===")
+        for item in results[:10]:
+            print(item.parameters, f"test_return={item.test.cumulative_return:.2%}")
+    except (OSError, ValueError) as exc:
+        print(f"Optimization failed: {exc}")
+
+
 def current_mode() -> str:
     configured = os.getenv("TRADING_MODE", "PAPER").upper()
     if configured == "LIVE" and os.getenv("BYBIT_TESTNET", "true").lower() == "false":
@@ -1290,7 +1334,9 @@ def show_menu() -> None:
         )
 
         print("12. Paper Performance")
-        print("13. Exit")
+        print("13. Backtest Historical Data")
+        print("14. Optimize Strategy")
+        print("15. Exit")
 
         print("=" * 45)
 
@@ -1348,6 +1394,14 @@ def show_menu() -> None:
 
         elif choice == "13":
 
+            backtest_menu()
+
+        elif choice == "14":
+
+            optimization_menu()
+
+        elif choice == "15":
+
             print()
             print(
                 "Exiting BYBIT AUTOPILOT."
@@ -1360,7 +1414,7 @@ def show_menu() -> None:
             print()
             print(
                 "Invalid option. "
-                "Please choose 1-13."
+                "Please choose 1-15."
             )
 
 
