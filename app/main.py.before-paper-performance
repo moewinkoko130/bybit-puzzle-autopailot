@@ -1186,23 +1186,6 @@ def risk_management() -> None:
                 "Invalid option. Please choose 1-6."
             )
 
-def paper_performance() -> None:
-
-    print()
-    print("=" * 45)
-    print("          PAPER PERFORMANCE")
-    print("=" * 45)
-    print()
-    print("No closed paper trades in current menu session.")
-    print()
-    print("Persistent trade history will be connected")
-    print("to the paper bot in the next step.")
-    print()
-    print("✓ PAPER ONLY")
-    print("✓ No real trading order was placed.")
-    print("=" * 45)
-
-
 def run_bot() -> None:
 
     run_signal_bot()
@@ -1315,10 +1298,6 @@ def show_menu() -> None:
 
             run_bot()
 
-        elif choice == "13":
-
-            paper_performance()
-
         elif choice == "12":
 
             print()
@@ -1345,5 +1324,3 @@ def main() -> None:
 if __name__ == "__main__":
 
     main()
-
-

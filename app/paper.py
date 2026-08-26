@@ -63,17 +63,13 @@ def calculate_pnl(
 ) -> float:
 
     if position.side == "BUY":
-
         return (
-            current_price
-            - position.entry_price
+            current_price - position.entry_price
         ) * position.quantity
 
     if position.side == "SELL":
-
         return (
-            position.entry_price
-            - current_price
+            position.entry_price - current_price
         ) * position.quantity
 
     return 0.0
@@ -114,16 +110,6 @@ def close_paper_position(
             "Exit price must be greater than zero."
         )
 
-    reason = reason.upper()
-
-    if reason not in {
-        "STOP_LOSS",
-        "TAKE_PROFIT",
-        "MANUAL",
-        "SIGNAL_CHANGE",
-    }:
-        reason = "MANUAL"
-
     pnl = calculate_pnl(
         position,
         exit_price,
@@ -139,10 +125,69 @@ def close_paper_position(
         exit_price=exit_price,
         quantity=position.quantity,
         pnl=pnl,
-        reason=reason,
+        reason=reason.upper(),
         opened_at=position.opened_at,
         closed_at=closed_at,
     )
+
+
+def calculate_statistics(
+    trades: list[PaperTrade],
+) -> dict:
+
+    total_trades = len(trades)
+
+    if total_trades == 0:
+        return {
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "breakeven": 0,
+            "win_rate": 0.0,
+            "total_pnl": 0.0,
+            "average_pnl": 0.0,
+        }
+
+    wins = sum(
+        1
+        for trade in trades
+        if trade.pnl > 0
+    )
+
+    losses = sum(
+        1
+        for trade in trades
+        if trade.pnl < 0
+    )
+
+    breakeven = sum(
+        1
+        for trade in trades
+        if trade.pnl == 0
+    )
+
+    total_pnl = sum(
+        trade.pnl
+        for trade in trades
+    )
+
+    average_pnl = (
+        total_pnl / total_trades
+    )
+
+    win_rate = (
+        wins / total_trades * 100
+    )
+
+    return {
+        "total_trades": total_trades,
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate": win_rate,
+        "total_pnl": total_pnl,
+        "average_pnl": average_pnl,
+    }
 
 
 def format_paper_trade(
@@ -155,14 +200,61 @@ def format_paper_trade(
         f"Entry={trade.entry_price:.2f} | "
         f"Exit={trade.exit_price:.2f} | "
         f"Qty={trade.quantity:.6f} | "
-        f"PnL={trade.pnl:.4f} | "
+        f"PnL={trade.pnl:+.4f} | "
         f"Reason={trade.reason}"
+    )
+
+
+def print_statistics(
+    trades: list[PaperTrade],
+) -> None:
+
+    stats = calculate_statistics(
+        trades
+    )
+
+    print()
+    print("=== PAPER PERFORMANCE ===")
+    print()
+    print(
+        f"Total Trades : "
+        f"{stats['total_trades']}"
+    )
+    print(
+        f"Wins         : "
+        f"{stats['wins']}"
+    )
+    print(
+        f"Losses       : "
+        f"{stats['losses']}"
+    )
+    print(
+        f"Breakeven    : "
+        f"{stats['breakeven']}"
+    )
+    print(
+        f"Win Rate     : "
+        f"{stats['win_rate']:.2f}%"
+    )
+    print(
+        f"Total PnL    : "
+        f"{stats['total_pnl']:+.4f}"
+    )
+    print(
+        f"Average PnL  : "
+        f"{stats['average_pnl']:+.4f}"
     )
 
 
 if __name__ == "__main__":
 
-    position = open_paper_position(
+    trades = []
+
+    # -----------------------------
+    # Test BUY trade
+    # -----------------------------
+
+    buy_position = open_paper_position(
         signal="BUY",
         entry_price=78000.0,
         quantity=0.01,
@@ -170,78 +262,55 @@ if __name__ == "__main__":
         take_profit=79560.0,
     )
 
-    if position:
+    if buy_position:
 
-        print("=== PAPER POSITION ===")
-        print(
-            "Side        :",
-            position.side,
-        )
-        print(
-            "Entry Price :",
-            position.entry_price,
-        )
-        print(
-            "Quantity    :",
-            position.quantity,
-        )
-        print(
-            "Stop Loss   :",
-            position.stop_loss,
-        )
-        print(
-            "Take Profit :",
-            position.take_profit,
-        )
-        print(
-            "Opened At   :",
-            position.opened_at,
+        buy_trade = close_paper_position(
+            buy_position,
+            exit_price=79560.0,
+            reason="TAKE_PROFIT",
         )
 
-        current_price = 78500.0
+        trades.append(buy_trade)
 
-        print()
-        print(
-            "Current     :",
-            current_price,
+    # -----------------------------
+    # Test SELL trade
+    # -----------------------------
+
+    sell_position = open_paper_position(
+        signal="SELL",
+        entry_price=78000.0,
+        quantity=0.01,
+        stop_loss=78780.0,
+        take_profit=76440.0,
+    )
+
+    if sell_position:
+
+        sell_trade = close_paper_position(
+            sell_position,
+            exit_price=78780.0,
+            reason="STOP_LOSS",
         )
 
-        pnl = calculate_pnl(
-            position,
-            current_price,
-        )
+        trades.append(sell_trade)
 
-        status = check_exit(
-            position,
-            current_price,
-        )
+    print("=== PAPER TRADE HISTORY ===")
+    print()
+
+    for index, trade in enumerate(
+        trades,
+        start=1,
+    ):
 
         print(
-            "PnL         :",
-            pnl,
+            f"{index}. "
+            f"{format_paper_trade(trade)}"
         )
 
-        print(
-            "Status      :",
-            status,
-        )
+    print_statistics(
+        trades
+    )
 
-        if status != "OPEN":
-
-            trade = close_paper_position(
-                position,
-                current_price,
-                status,
-            )
-
-            print()
-            print("=== PAPER TRADE CLOSED ===")
-            print(
-                format_paper_trade(
-                    trade
-                )
-            )
-
-        print()
-        print("✓ PAPER ONLY")
-        print("✓ No real order was placed.")
+    print()
+    print("✓ PAPER ONLY")
+    print("✓ No real order was placed.")
