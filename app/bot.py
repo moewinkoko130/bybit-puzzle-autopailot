@@ -1,0 +1,135 @@
+import os
+import time
+from datetime import datetime
+
+from app.market import get_candles
+from app.strategy import analyze_prices
+
+
+def get_settings():
+    symbol = os.getenv(
+        "BYBIT_SYMBOL",
+        "BTCUSDT",
+    ).strip().upper()
+
+    timeframe = os.getenv(
+        "BYBIT_TIMEFRAME",
+        "5",
+    ).strip()
+
+    testnet = (
+        os.getenv(
+            "BYBIT_TESTNET",
+            "true",
+        ).lower()
+        == "true"
+    )
+
+    return symbol, timeframe, testnet
+
+
+def run_signal_bot() -> None:
+    symbol, timeframe, testnet = get_settings()
+
+    print()
+    print("=" * 55)
+    print("              BYBIT AUTOPILOT")
+    print("=" * 55)
+    print("Mode        : SAFE / SIGNAL ONLY")
+    print(
+        "Environment : "
+        + ("TESTNET" if testnet else "MAINNET")
+    )
+    print(f"Symbol      : {symbol}")
+    print(f"Timeframe   : {timeframe} minutes")
+    print("Strategy    : EMA 9/21")
+    print()
+    print("No trading orders will be placed.")
+    print("Press Ctrl+C to stop the bot.")
+    print("=" * 55)
+
+    previous_signal = None
+
+    try:
+        while True:
+            try:
+                prices = get_candles(
+                    symbol=symbol,
+                    interval=timeframe,
+                    limit=100,
+                    testnet=testnet,
+                )
+
+                if len(prices) < 21:
+                    print()
+                    print(
+                        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+                        "Not enough candle data."
+                    )
+
+                    time.sleep(10)
+                    continue
+
+                result = analyze_prices(prices)
+
+                fast_ema = result["fast_ema"]
+                slow_ema = result["slow_ema"]
+                signal = result["signal"]
+
+                last_price = prices[-1]
+
+                now = datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+
+                changed = (
+                    previous_signal is not None
+                    and signal != previous_signal
+                )
+
+                print()
+                print("-" * 55)
+                print(f"Time         : {now}")
+                print(f"Symbol       : {symbol}")
+                print(f"Last Price   : {last_price:.2f}")
+                print(f"EMA 9        : {fast_ema:.2f}")
+                print(f"EMA 21       : {slow_ema:.2f}")
+                print(f"Signal       : {signal}")
+
+                if changed:
+                    print()
+                    print(
+                        f"*** SIGNAL CHANGED: "
+                        f"{previous_signal} -> {signal} ***"
+                    )
+
+                print()
+                print("Mode         : SIGNAL ONLY")
+                print("Order        : NOT PLACED")
+                print("-" * 55)
+
+                previous_signal = signal
+
+            except Exception as exc:
+                print()
+                print("=" * 55)
+                print("BOT ERROR")
+                print("=" * 55)
+                print(f"Error: {exc}")
+                print("Retrying...")
+                print("=" * 55)
+
+            # Refresh every 30 seconds.
+            # This keeps the bot responsive while avoiding
+            # excessive API requests.
+            time.sleep(30)
+
+    except KeyboardInterrupt:
+        print()
+        print()
+        print("=" * 55)
+        print("             BOT STOPPED")
+        print("=" * 55)
+        print("✓ Bot stopped by user.")
+        print("✓ No trading order was placed.")
+        print("=" * 55)

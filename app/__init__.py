@@ -1,0 +1,1 @@
+"""Bybit automation application package."""
