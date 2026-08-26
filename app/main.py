@@ -983,12 +983,12 @@ def risk_management() -> None:
                     continue
 
                 save_env_value(
-                    "STOP_LOSS_PERCENT",
+                    "PAPER_STOP_LOSS_PERCENT",
                     str(value),
                 )
 
                 os.environ[
-                    "STOP_LOSS_PERCENT"
+                    "PAPER_STOP_LOSS_PERCENT"
                 ] = str(value)
 
                 print()
@@ -1025,12 +1025,12 @@ def risk_management() -> None:
                     continue
 
                 save_env_value(
-                    "REWARD_RATIO",
+                    "PAPER_REWARD_RATIO",
                     str(value),
                 )
 
                 os.environ[
-                    "REWARD_RATIO"
+                    "PAPER_REWARD_RATIO"
                 ] = str(value)
 
                 print()
@@ -1069,14 +1069,14 @@ def risk_management() -> None:
 
                 stop_loss_percent = float(
                     os.getenv(
-                        "STOP_LOSS_PERCENT",
+                        "PAPER_STOP_LOSS_PERCENT",
                         "1.0",
                     )
                 )
 
                 reward_ratio = float(
                     os.getenv(
-                        "REWARD_RATIO",
+                        "PAPER_REWARD_RATIO",
                         "2.0",
                     )
                 )
@@ -1146,12 +1146,12 @@ def risk_management() -> None:
             )
 
             stop_loss = os.getenv(
-                "STOP_LOSS_PERCENT",
+                "PAPER_STOP_LOSS_PERCENT",
                 "1.0",
             )
 
             reward_ratio = os.getenv(
-                "REWARD_RATIO",
+                "PAPER_REWARD_RATIO",
                 "2.0",
             )
 

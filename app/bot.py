@@ -6,12 +6,11 @@ from app.market import get_candles
 from app.strategy import analyze_prices
 from app.risk import calculate_risk
 from app.paper import (
+    PaperExecutor,
     PaperPosition,
     PaperTrade,
-    open_paper_position,
     calculate_pnl,
     check_exit,
-    close_paper_position,
     format_paper_trade,
 )
 
@@ -179,8 +178,11 @@ def run_signal_bot() -> None:
 
     print("=" * 55)
 
-    paper_position: PaperPosition | None = None
-    trade_history: list[PaperTrade] = []
+    paper_executor = PaperExecutor(
+        db_path=os.getenv("PAPER_DATABASE", "logs/paper_trades.sqlite3")
+    )
+    paper_position: PaperPosition | None = paper_executor.position
+    trade_history: list[PaperTrade] = paper_executor.closed_trades()
 
     previous_signal = None
 
@@ -253,10 +255,7 @@ def run_signal_bot() -> None:
 
                 if paper_position is not None:
 
-                    position_status = check_exit(
-                        paper_position,
-                        last_price,
-                    )
+                    position_status = paper_executor.check_exit(last_price)
 
                     pnl = calculate_pnl(
                         paper_position,
@@ -295,15 +294,8 @@ def run_signal_bot() -> None:
 
                     if position_status != "OPEN":
 
-                        trade = close_paper_position(
-                            paper_position,
-                            last_price,
-                            position_status,
-                        )
-
-                        trade_history.append(
-                            trade
-                        )
+                        trade = paper_executor.close_position(last_price, position_status)
+                        trade_history = paper_executor.closed_trades()
 
                         print()
                         print(
@@ -327,28 +319,7 @@ def run_signal_bot() -> None:
                         and signal != paper_position.side
                     ):
 
-                        trade = close_paper_position(
-                            paper_position,
-                            last_price,
-                            "SIGNAL_CHANGE",
-                        )
-
-                        trade_history.append(
-                            trade
-                        )
-
-                        print()
-                        print(
-                            "=== PAPER POSITION CLOSED ==="
-                        )
-
-                        print(
-                            format_paper_trade(
-                                trade
-                            )
-                        )
-
-                        paper_position = None
+                        print("Signal changed; existing paper position remains open.")
 
                 # -------------------------------------------------
                 # 4. Open new paper position
@@ -392,15 +363,17 @@ def run_signal_bot() -> None:
                             )
                         )
 
-                    paper_position = (
-                        open_paper_position(
-                            signal=signal,
-                            entry_price=last_price,
-                            quantity=risk_result.position_size,
-                            stop_loss=stop_loss,
-                            take_profit=take_profit,
-                        )
+                    paper_position = paper_executor.open_position(
+                        signal=signal,
+                        entry_price=last_price,
+                        quantity=risk_result.position_size,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        strategy="EMA 9/21",
                     )
+                    trade_history = paper_executor.closed_trades()
 
                     if paper_position:
 
